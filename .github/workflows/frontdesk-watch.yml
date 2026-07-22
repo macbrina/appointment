@@ -1,0 +1,42 @@
+name: Frontdesk Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/2 * * * *"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          python -m playwright install --with-deps chromium
+
+      - name: Prepare watcher state
+        run: |
+          mkdir -p state
+          touch state/seen_slots.json state/last_fingerprint.txt state/heartbeat.txt
+
+      - name: Run watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRONTDESK_WITNESS_CHOICE: ${{ vars.FRONTDESK_WITNESS_CHOICE || 'no' }}
+          FRONTDESK_AUTO_CLICK_FIRST_SLOT: ${{ vars.FRONTDESK_AUTO_CLICK_FIRST_SLOT || 'false' }}
+          FRONTDESK_HEARTBEAT_INTERVAL_SECONDS: ${{ vars.FRONTDESK_HEARTBEAT_INTERVAL_SECONDS || '86400' }}
+          FRONTDESK_STATE_DIR: ${{ github.workspace }}/state
+        run: |
+          python frontdesk_watch.py
