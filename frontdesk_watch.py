@@ -140,6 +140,7 @@ class Config:
     last_fingerprint_file: str = "last_fingerprint.txt"
     heartbeat_file: str = "heartbeat.txt"
     heartbeat_interval_seconds: int = 24 * 60 * 60
+    run_forever: bool = False
 
 
 def cutoff_date(cfg: Config) -> date:
@@ -330,6 +331,11 @@ async def main_async() -> None:
         ).strip()
         or cfg.heartbeat_interval_seconds
     )
+    cfg.run_forever = os.getenv("FRONTDESK_RUN_FOREVER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     # Prefer a state directory if provided by the runtime/container.
     # Check ENV, then conventional mount path, then fallback to current working dir.
@@ -371,11 +377,16 @@ async def main_async() -> None:
 
     print(f"Watching: {cfg.home_url}")
     print(f"Cutoff: before {cutoff_date(cfg).isoformat()}")
-    print(
-        f"Checking every {cfg.interval_seconds}s (+ up to {cfg.jitter_seconds}s jitter)."
-    )
+    if cfg.run_forever:
+        print(
+            f"Checking every {cfg.interval_seconds}s (+ up to {cfg.jitter_seconds}s jitter)."
+        )
+    else:
+        print("Running a single scheduled check and exiting after completion.")
 
+    iteration = 0
     while True:
+        iteration += 1
         try:
             slots = await get_available_slots(cfg)
             good = [s for s in slots if is_before_cutoff(s, cfg)]
@@ -437,6 +448,9 @@ async def main_async() -> None:
             print(
                 f"{datetime.now().isoformat(sep=' ', timespec='seconds')} — error: {exc}"
             )
+
+        if not cfg.run_forever:
+            break
 
         await asyncio.sleep(
             cfg.interval_seconds + random.randint(0, cfg.jitter_seconds)
