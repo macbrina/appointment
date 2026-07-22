@@ -98,6 +98,23 @@ def build_telegram_message(slots: List[datetime], home_url: str) -> str:
     )
 
 
+def build_heartbeat_message(home_url: str, interval_seconds: int = 24 * 60 * 60) -> str:
+    """Create a concise Telegram heartbeat message used for startup and liveness."""
+    if interval_seconds >= 24 * 60 * 60:
+        interval_text = "24 hours"
+    else:
+        interval_text = f"{max(1, interval_seconds // 60)} minutes"
+
+    return "\n".join(
+        [
+            "Frontdesk watcher heartbeat",
+            "The watcher is still running and checking for new openings.",
+            f"Next heartbeat in about {interval_text}.",
+            f"Open: {home_url}",
+        ]
+    )
+
+
 @dataclass
 class Config:
     home_url: str = (
@@ -121,6 +138,8 @@ class Config:
     auto_click_first_slot: bool = False
     telegram_remind_if_still_available: bool = False
     last_fingerprint_file: str = "last_fingerprint.txt"
+    heartbeat_file: str = "heartbeat.txt"
+    heartbeat_interval_seconds: int = 24 * 60 * 60
 
 
 def cutoff_date(cfg: Config) -> date:
@@ -159,6 +178,30 @@ def save_last_fingerprint(path: str, fp: str) -> None:
             f.write(fp or "")
     except Exception:
         pass
+
+
+def load_last_heartbeat(path: str) -> float:
+    try:
+        if not os.path.exists(path):
+            return 0.0
+        with open(path, "r", encoding="utf-8") as f:
+            return float(f.read().strip() or 0.0)
+    except Exception:
+        return 0.0
+
+
+def save_last_heartbeat(path: str, ts: float) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(ts))
+    except Exception:
+        pass
+
+
+def should_send_heartbeat(last_ts: float, now_ts: float, interval_seconds: int) -> bool:
+    if last_ts <= 0:
+        return True
+    return (now_ts - last_ts) >= interval_seconds
 
 
 def parse_times_from_html(html: str) -> List[datetime]:
@@ -280,6 +323,13 @@ async def main_async() -> None:
         os.getenv("FRONTDESK_AUTO_CLICK_FIRST_SLOT", "").strip().lower()
         in {"1", "true", "yes"}
     ) or cfg.auto_click_first_slot
+    cfg.heartbeat_interval_seconds = int(
+        os.getenv(
+            "FRONTDESK_HEARTBEAT_INTERVAL_SECONDS",
+            str(cfg.heartbeat_interval_seconds),
+        ).strip()
+        or cfg.heartbeat_interval_seconds
+    )
 
     # Prefer a state directory if provided by the runtime/container.
     # Check ENV, then conventional mount path, then fallback to current working dir.
@@ -304,11 +354,20 @@ async def main_async() -> None:
         cfg.last_fingerprint_file = str(
             Path(state_dir) / Path(cfg.last_fingerprint_file).name
         )
+        cfg.heartbeat_file = str(Path(state_dir) / Path(cfg.heartbeat_file).name)
 
     seen = load_seen(cfg.seen_file)
     last_telegram_sent_at = 0.0
     # load persisted last fingerprint so we notify on changes across restarts
     last_fingerprint = load_last_fingerprint(cfg.last_fingerprint_file)
+    last_heartbeat = load_last_heartbeat(cfg.heartbeat_file)
+    now_ts = time.time()
+    if should_send_heartbeat(last_heartbeat, now_ts, cfg.heartbeat_interval_seconds):
+        telegram_send(
+            build_heartbeat_message(cfg.home_url, cfg.heartbeat_interval_seconds)
+        )
+        last_heartbeat = now_ts
+        save_last_heartbeat(cfg.heartbeat_file, last_heartbeat)
 
     print(f"Watching: {cfg.home_url}")
     print(f"Cutoff: before {cutoff_date(cfg).isoformat()}")
@@ -353,6 +412,11 @@ async def main_async() -> None:
                     >= cfg.telegram_min_interval_seconds
                 )
             )
+            should_send_liveness = should_send_heartbeat(
+                last_heartbeat,
+                now_ts,
+                cfg.heartbeat_interval_seconds,
+            )
 
             if should_notify_change or should_notify_reminder:
                 telegram_send(build_telegram_message(good, cfg.home_url))
@@ -360,6 +424,15 @@ async def main_async() -> None:
                 last_fingerprint = fp
                 # persist fingerprint so restarts still notice changes
                 save_last_fingerprint(cfg.last_fingerprint_file, fp)
+
+            if should_send_liveness:
+                telegram_send(
+                    build_heartbeat_message(
+                        cfg.home_url, cfg.heartbeat_interval_seconds
+                    )
+                )
+                last_heartbeat = now_ts
+                save_last_heartbeat(cfg.heartbeat_file, last_heartbeat)
         except Exception as exc:
             print(
                 f"{datetime.now().isoformat(sep=' ', timespec='seconds')} — error: {exc}"

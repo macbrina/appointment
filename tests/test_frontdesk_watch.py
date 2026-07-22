@@ -2,7 +2,15 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from frontdesk_watch import build_telegram_message, load_dotenv, parse_times_from_html
+from frontdesk_watch import (
+    build_heartbeat_message,
+    build_telegram_message,
+    load_dotenv,
+    load_last_heartbeat,
+    parse_times_from_html,
+    save_last_heartbeat,
+    should_send_heartbeat,
+)
 
 
 def test_parse_times_from_html_collects_available_slots() -> None:
@@ -49,3 +57,24 @@ def test_load_dotenv_reads_values_from_file(tmp_path: Path) -> None:
 
     assert os.environ["TELEGRAM_BOT_TOKEN"] == "abc123"
     assert os.environ["TELEGRAM_CHAT_ID"] == "456"
+
+
+def test_build_heartbeat_message_is_clear() -> None:
+    message = build_heartbeat_message(
+        "https://example.test",
+        interval_seconds=86400,
+    )
+
+    assert "Frontdesk watcher heartbeat" in message
+    assert "https://example.test" in message
+    assert "24 hours" in message
+
+
+def test_heartbeat_helpers_persist_and_trigger(tmp_path: Path) -> None:
+    heartbeat_path = tmp_path / "heartbeat.txt"
+
+    assert load_last_heartbeat(str(heartbeat_path)) == 0.0
+    save_last_heartbeat(str(heartbeat_path), 100.0)
+    assert load_last_heartbeat(str(heartbeat_path)) == 100.0
+    assert should_send_heartbeat(100.0, 100.0, 60) is False
+    assert should_send_heartbeat(100.0, 200.0, 60) is True

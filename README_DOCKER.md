@@ -41,3 +41,4 @@ Notes and recommendations:
 - The watcher writes `seen_slots.json` and `last_fingerprint.txt` to the mounted files so availability is persisted across restarts.
 - If you prefer a named Docker volume instead of host files, the `docker-compose.yml` example already uses a named volume `watcher_state`.
 - Keep `interval_seconds` and `jitter_seconds` conservative to avoid overloading the target site.
+- For production heartbeat notifications, the watcher sends a startup message on first launch and then a daily heartbeat. You can override the interval with `FRONTDESK_HEARTBEAT_INTERVAL_SECONDS` (in seconds) if you want a different cadence.
